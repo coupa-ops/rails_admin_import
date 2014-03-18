@@ -30,6 +30,10 @@ module RailsAdmin
           true
         end
 
+        register_instance_option :defaults do
+          {}
+        end
+
         register_instance_option :http_methods do
           [:get, :post]
         end

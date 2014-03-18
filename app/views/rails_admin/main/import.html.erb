@@ -13,6 +13,12 @@
 
 <h1>Import <%= @abstract_model.to_param.titleize %></h1>
 
+<% if (header_partial = RailsAdminImport.config(@abstract_model.model).header_partial).present? -%>
+<div>
+  <%= render partial: header_partial %>
+</div>
+<% end %>
+
 <small>The following fields may be included in the import file</small>
 <table width="100%" cellpadding="0" cellspacing="0">
 <tr>
@@ -20,7 +26,7 @@
 <h3>Standard Fields</h3>
 <ul>
 <% @abstract_model.model.import_fields.each do |field| -%>
-<li><%= field %></li>
+<li><%= field.to_s.humanize %></li>
 <% end -%>
 </ul>
 </td>
@@ -30,7 +36,7 @@
 <h3>Belongs To Fields</h3>
 <ul>
 <% @abstract_model.model.belongs_to_fields.each do |field| -%>
-<li><%= field %></li>
+<li><%= field.to_s.humanize %></li>
 <% end -%>
 </ul>
 <small>These fields map to other items in the database, lookup via attribute selected below.</small>
@@ -42,7 +48,7 @@
 <h3>File Fields</h3>
 <ul>
 <% @abstract_model.model.file_fields.each do |field| -%>
-<li><%= field %></li>
+<li><%= field.to_s.humanize %></li>
 <% end -%>
 </ul>
 <small>These must be a downloadable URL.</small>
@@ -54,7 +60,7 @@
 <h3>Multiple Fields</h3>
 <ul>
 <% @abstract_model.model.many_fields.each do |field| -%>
-<li><%= field %></li>
+<li><%= field.to_s.humanize %></li>
 <% end -%>
 </ul>
 <small>These fields map to other columns in the database, lookup via attribute selected below. There may be multiple columns with this header in the spreadsheet.</small>
@@ -66,7 +72,7 @@
 <h3>Extra Fields</h3>
 <ul>
 <% RailsAdminImport.config(@abstract_model.model).extra_fields.each do |field| -%>
-<li><%= field %></li>
+<li><%= field.to_s.humanize %></li>
 <% end -%>
 </ul>
 <small>Additional application specific fields.</small>
@@ -89,14 +95,26 @@
   </p>
 
   <% [@abstract_model.model.belongs_to_fields, @abstract_model.model.many_fields].flatten.each do |field| -%>
-  <div style="display:inline-block; width: 45%;background:#cecece;margin: 5px;padding: 5px;">
-  <label style="width:200px;"><%= field %> mapping</label>&nbsp;&nbsp;
-  <select name="<%= field %>">
-    <% field.to_s.classify.constantize.new.attributes.keys.each do |key| -%>
-  	<option value="<%= key %>"><%= key %></option>
-	<% end -%>
-  <select>
-  </div>
+    <div style="display:inline-block; width: 45%;background:#cecece;margin: 5px;padding: 5px;">
+    <label style="width:200px;"><%= field.to_s.humanize %> mapping</label>&nbsp;&nbsp;
+    <select name="<%= field %>" autocomplete="off">
+    <% if polymorphs = @abstract_model.model.all_polymorphic_types(field) %>
+      <% default_key  = @action.defaults[:"#{field}_key"] %>
+      <% default_type = @action.defaults[:"#{field}_type"] %>
+      <% polymorphs.each do |model| %>
+        <% model.new.attributes.keys.each do |key| -%>
+          <% selected = @action.defaults[:"#{field}_key"] == key %>
+          <option value="<%= "#{model.to_s.underscore}.#{key}" %>" <%= 'selected=selected' if key == default_key && model.to_s == default_type %>><%= "#{model.to_s}.#{key.to_s.humanize}" %></option>
+        <% end -%>
+      <% end -%>
+    <% else -%>
+      <% default_key  = @action.defaults[:"#{field}_key"] %>
+      <% field.to_s.classify.constantize.new.attributes.keys.each do |key| -%>
+        <option value="<%= key %>" <%= 'selected=selected' if key == default_key %>><%= key.to_s.humanize %></option>
+      <% end -%>
+    <% end -%>
+    </select>
+    </div>
   <% end -%><br />
   <%= submit_tag "Upload", :disable_with => "Uploading..." %>
 <% end -%>

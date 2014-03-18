@@ -20,6 +20,7 @@ module RailsAdminImport
   
         self.belongs_to_fields.each do |key|
           fields.delete("#{key}_id".to_sym)
+          fields.delete("#{key}_type".to_sym)
         end
   
         self.file_fields.each do |key|
@@ -52,8 +53,22 @@ module RailsAdminImport
 
         attrs - RailsAdminImport.config(self).excluded_fields 
       end 
+
+      def all_polymorphic_types(name)
+        @poly_hash ||= {}.tap do |hash|
+          Dir.glob(File.join(Rails.root, "app", "models", "**", "*.rb")).each do |file|
+            klass = (File.basename(file, ".rb").camelize.constantize rescue nil)
+            next if klass.nil? or !klass.ancestors.include?(ActiveRecord::Base)
+            klass.reflect_on_all_associations(:has_many).select{|r| r.options[:as] }.each do |reflection|
+              (hash[reflection.options[:as]] ||= []) << klass
+            end
+          end
+        end
+        @poly_hash[name.to_sym]
+      end
   
       def run_import(params)
+        logger = nil
         begin
           if !params.has_key?(:file)
             return results = { :success => [], :error => ["You must select a file."] }
@@ -75,7 +90,8 @@ module RailsAdminImport
           map = {}
    
           file = CSV.new(clean)
-          file.readline.each_with_index do |key, i|
+          file.readline.each_with_index do |l, i|
+            key = l.underscore.gsub(/\s/, '_')
             if self.many_fields.include?(key.to_sym)
               map[key.to_sym] ||= []
               map[key.to_sym] << i
@@ -91,21 +107,13 @@ module RailsAdminImport
           end 
     
           results = { :success => [], :error => [] }
-    
-          associated_map = {}
-          self.belongs_to_fields.flatten.each do |field|
-            associated_map[field] = field.to_s.classify.constantize.all.inject({}) { |hash, c| hash[c.send(params[field]).to_s] = c.id; hash }
-          end
-          self.many_fields.flatten.each do |field|
-            associated_map[field] = field.to_s.classify.constantize.all.inject({}) { |hash, c| hash[c.send(params[field]).to_s] = c; hash }
-          end
-   
+
           label_method = RailsAdminImport.config(self).label
   
           file.each do |row|
             object = self.import_initialize(row, map, update)
-            object.import_belongs_to_data(associated_map, row, map)
-            object.import_many_data(associated_map, row, map)
+            object.import_belongs_to_data(row, map, params)
+            object.import_many_data(row, map, params)
             object.before_import_save(row, map)
   
             object.import_files(row, map)
@@ -113,21 +121,21 @@ module RailsAdminImport
             verb = object.new_record? ? "Create" : "Update"
             if object.errors.empty?
               if object.save
-                logger.info "#{Time.now.to_s}: #{verb}d: #{object.send(label_method)}" if RailsAdminImport.config.logging
+                logger.info "#{Time.now.to_s}: #{verb}d: #{object.send(label_method)}" if logger
                 results[:success] << "#{verb}d: #{object.send(label_method)}"
               else
-                logger.info "#{Time.now.to_s}: Failed to #{verb}: #{object.send(label_method)}. Errors: #{object.errors.full_messages.join(', ')}." if RailsAdminImport.config.logging
+                logger.info "#{Time.now.to_s}: Failed to #{verb}: #{object.send(label_method)}. Errors: #{object.errors.full_messages.join(', ')}." if logger
                 results[:error] << "Failed to #{verb}: #{object.send(label_method)}. Errors: #{object.errors.full_messages.join(', ')}."
               end
             else
-              logger.info "#{Time.now.to_s}: Errors before save: #{object.send(label_method)}. Errors: #{object.errors.full_messages.join(', ')}." if RailsAdminImport.config.logging
+              logger.info "#{Time.now.to_s}: Errors before save: #{object.send(label_method)}. Errors: #{object.errors.full_messages.join(', ')}." if logger
               results[:error] << "Errors before save: #{object.send(label_method)}. Errors: #{object.errors.full_messages.join(', ')}."
             end
           end
     
           results
         rescue Exception => e
-          logger.info "#{Time.now.to_s}: Unknown exception in import: #{e.inspect}"
+          logger.info "#{Time.now.to_s}: Unknown exception in import: #{e.inspect}#{e.backtrace.join("\n")}" if logger
           return results = { :success => [], :error => ["Could not upload. Unexpected error: #{e.to_s}"] }
         end
       end
@@ -180,28 +188,43 @@ module RailsAdminImport
       end
     end
 
-    def import_belongs_to_data(associated_map, row, map)
+    def import_belongs_to_data(row, map, params)
       self.class.belongs_to_fields.each do |key|
+        assoc_key = params[key.to_s]
         if map.has_key?(key) && row[map[key]] != ""
-          self.send("#{key}_id=", associated_map[key][row[map[key]]])
+          self.send("#{key}=", find_assoc_obj(key, assoc_key, row[map[key]]))
         end
       end
     end
 
-    def import_many_data(associated_map, row, map)
+    def import_many_data(row, map, params)
       self.class.many_fields.each do |key|
         values = []
+        assoc_key = params[key.to_s]
 
         map[key] ||= []
         map[key].each do |pos|
-          if row[pos] != "" && associated_map[key][row[pos]]
-            values << associated_map[key][row[pos]]
+          if row[pos] != ""
+            if obj = find_assoc_obj(key, assoc_key, row[pos])
+              values << obj
+            end
           end
         end
 
         if values.any?
           self.send("#{key.to_s.pluralize}=", values)
         end
+      end
+    end
+
+    def find_assoc_obj(key, assoc_key, value)
+      if assoc_key.index('.')
+        # polymorphic
+        model, field = assoc_key.split('.')
+        obj = model.classify.constantize.where(:"#{field}" => value).first
+      else
+        field = assoc_key
+        obj = key.to_s.classify.constantize.where(:"#{field}" => value).first
       end
     end
   end
