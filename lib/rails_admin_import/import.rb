@@ -81,6 +81,7 @@ module RailsAdminImport
 
           text = File.read(params[:file].tempfile)
           clean = text.force_encoding('BINARY').encode('UTF-8', :undef => :replace, :replace => '').gsub(/\n$/, '').gsub(/ *, */, ',')
+          clean.downcase!
           file_check = CSV.new(clean)
 
           if file_check.readlines.size > RailsAdminImport.config.line_item_limit
